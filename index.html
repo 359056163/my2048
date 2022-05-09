@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>my2048</title>
+    <style>
+        td{
+            border: 1px solid #000000;
+            width: 100px;
+            height: 100px;
+            margin: 10px;
+            padding: 10px;
+        }
+        td>span{
+            display: block;
+            font-weight: bolder;
+            font-size: 34px;
+            border: 1px solid;
+            padding: 10px 20px;
+            text-align: center;
+        }
+
+    </style>
+</head>
+<body>
+<table id="stage">
+    <tr>
+        <td id="0_0"></td> <td id="1_0"></td> <td id="2_0"></td> <td id="3_0"></td>
+    </tr>
+    <tr>
+        <td id="0_1"></td> <td id="1_1"></td> <td id="2_1"></td> <td id="3_1"></td>
+    </tr>
+    <tr>
+        <td id="0_2"></td> <td id="1_2"></td> <td id="2_2"></td> <td id="3_2"></td>
+    </tr>
+    <tr>
+        <td id="0_3"></td> <td id="1_3"></td> <td id="2_3"></td> <td id="3_3"></td>
+    </tr>
+</table>
+<p>按方向键：↑ ↓ ← → 对应活动方向</p>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.1/anime.min.js" integrity="sha512-z4OUqw38qNLpn1libAN9BsoDx6nbNFio5lA6CuTp9NlK83b89hgyCVq+N5FdBJptINztxn1Z3SaKSKUS5UP60Q==" crossorigin="anonymous"></script>
+<script src="lib/eventproxy.js"></script>
+<script>
+    const COLORS = [
+        '#ffff00',
+        '#ffcc00',
+        '#ff9900',
+        '#ff6600',
+        '#ff3300',
+        '#ff0000',
+        '#ff0099',
+        '#cc99ff',
+        '#99ffff',
+        '#6666ff',
+        '#33ff99',
+        '#33ff00'
+    ];
+    document.body.onload = function(){
+        stage.init();
+    };
+    document.addEventListener('keydown', async (evt) => {
+        let direction = null;
+        switch (evt.which) {
+            case 37: // left
+                direction = {x:-1, y:0};
+                break;
+            case 38: // up
+                direction = {x:0, y:-1};
+                break;
+            case 39: // right
+                direction = {x:1, y:0};
+                break;
+            case 40: // down
+                direction = {x:0, y:1};
+                break;
+        }
+        if(direction){
+            const moved = await stage.sweep(direction);
+            const merged = await stage.merge(direction);
+            await stage.sweep(direction);
+            console.log('moved',moved, 'merged', merged);
+            if(moved > 0 || merged > 0){
+                stage.randomMountCell();
+            }
+        }
+    });
+
+    const stage = {
+        cells: new Map(),
+        isAnimating: false,
+        init(){
+           this.randomMountCell();
+           this.randomMountCell();
+        },
+        randomMountCell(num , id){
+            const tds = document.querySelectorAll('td:empty');
+            if (tds.length === 0) {
+                throw new Error('没有新的空格了');
+            }
+            let x,y;
+            if (!id) {
+                const randomIndex = anime.random(0, tds.length - 1);
+                const randomTd = tds[randomIndex];
+                [x, y] = randomTd.id.split('_');
+            }else{
+                [x, y] = id.split('_');
+            }
+            if (!num) {
+                num = anime.random(1,2) * 2;
+            }
+            const cell = new Cell(x,y,num);
+            this.cells.set(cell.id, cell);
+        },
+        isEmptyCell(x, y){
+            const id = x + '_' + y;
+            const cell = document.getElementById(id);
+            if(!cell){
+                throw new Error(id+' 没有找到');
+            }
+            return cell.children.length <= 0;
+        },
+        sweep(direction) {
+            const self = this;
+            if (this.isAnimating) {
+                return;
+            }
+            this.isAnimating = true;
+            const ep = new EventProxy();
+            return new Promise((ok, fail)=>{
+                console.log(this.cells.size);
+                ep.after('moveDone', this.cells.size, (results)=>{
+                    console.log('results:',results);
+                    this.isAnimating = false;
+                    console.log('ep done');
+                    ok(results.reduce((p,c)=>{return parseInt(p) + parseInt(c)},0));
+                });
+                for(const cell of this.cells.values()){
+                    (async function (cell) {
+                        let result = 0;
+                        let dx = cell.x, dy = cell.y;
+                        let steps = 0;
+                        while (true){
+                            dx += direction.x;
+                            dy += direction.y;
+                            if(dx >= 0 && dx <=3 && dy >= 0 && dy <= 3){
+                                if(self.isEmptyCell(dx,dy)){
+                                    steps ++;
+                                }
+                            }else{
+                                break;
+                            }
+                        }
+                        const destX = cell.x + (direction.x * steps);
+                        const destY = cell.y + (direction.y * steps);
+
+                        if (destX !== cell.x || destY !== cell.y) {
+                            self.cells.delete(cell.id);
+                            await cell.moveTo(destX, destY);
+                            self.cells.set(destX + '_' + destY, cell);
+                            result = 1;
+                        }
+                        ep.emit('moveDone', result);
+                        console.log('moveDone Done');
+                    })(cell)
+                }
+            });
+        },
+        async merge(direction){
+            console.log(' stage.merge', direction);
+            const promises = [];
+            let previous;
+            if (direction.x > 0){
+                for(let y = 0; y < 4; y ++){
+                    for(let x = 3; x >= 0; x--){
+                        const cell = this.cells.get(x+'_'+y);
+                        if(!cell){
+                            previous = null;
+                            break;
+                        }
+                        if(!previous) {
+                            previous = cell;
+                            continue;
+                        }
+                        if (cell.num === previous.num && cell.y === previous.y) {
+                            promises.push(
+                                cell.merge(previous, direction)
+                            );
+                            previous = null;
+                        }else {
+                            previous = cell;
+                        }
+                    }
+                }
+            }else if (direction.x < 0){
+                for(let y = 0; y < 4; y ++){
+                    for(let x = 0; x < 4; x++){
+                        const cell = this.cells.get(x+'_'+y);
+                        if(!cell){
+                            previous = null;
+                            break;
+                        }
+                        if(!previous) {
+                            previous = cell;
+                            continue;
+                        }
+                        if (cell.num === previous.num && cell.y === previous.y) {
+                            promises.push(
+                                cell.merge(previous, direction)
+                            );
+                            previous = null;
+                        }else {
+                            previous = cell;
+                        }
+                    }
+                }
+            }else if (direction.y > 0){
+                for(let x = 0; x < 4; x ++){
+                    for(let y = 3; y >= 0; y--){
+                        const cell = this.cells.get(x+'_'+y);
+                        if(!cell){
+                            previous = null;
+                            break;
+                        }
+                        if(!previous) {
+                            previous = cell;
+                            continue;
+                        }
+                        if (cell.num === previous.num && cell.x === previous.x) {
+                            promises.push(
+                                cell.merge(previous, direction)
+                            );
+                            previous = null;
+                        }else {
+                            previous = cell;
+                        }
+                    }
+                }
+            }else if (direction.y < 0){
+                for(let x = 0; x < 4; x ++){
+                    for(let y = 0; y < 4; y++){
+                        const cell = this.cells.get(x+'_'+y);
+                        if(!cell){
+                            previous = null;
+                            break;
+                        }
+                        if(!previous) {
+                            previous = cell;
+                            continue;
+                        }
+                        if (cell.num === previous.num && cell.x === previous.x) {
+                            promises.push(
+                                cell.merge(previous, direction)
+                            );
+                            previous = null;
+                        }else {
+                            previous = cell;
+                        }
+                    }
+                }
+            }
+            const rs = await Promise.all(promises);
+
+            return rs.reduce((p,c)=>{return p + c}, 0);
+        }
+    };
+
+
+    class Cell {
+        constructor(x,y,num){
+            this.x = parseInt(x);
+            this.y = parseInt(y);
+            this.id = x + '_' + y;
+            this.dom = document.getElementById(this.id);
+            this.num = num;
+            this._mount();
+        }
+        _mount(){
+           const span = document.createElement('span');
+           span.innerText = this.num;
+           const color = this._getColor();
+           span.style = `background-color:${color}; border-color: ${color};`;
+           this.dom.append(span);
+           this.span = span;
+        }
+        _getColor(){
+           const index = Math.log2(this.num);
+           return COLORS[index];
+        }
+        upgrade(){
+            this.num *= 2;
+            this.span.innerText = this.num;
+            const color = this._getColor();
+            this.span.style.backgroundColor = color;
+            this.span.style.borderColor = color;
+        }
+        moveTo(x,y){
+            const targetPos = util.getPosition(this.dom);
+            const dest = document.getElementById(x + '_' + y);
+            const destPos = util.getPosition(dest);
+            return new Promise(ok=>{
+                anime({
+                    targets: this.span,
+                    translateX: destPos.left - targetPos.left,
+                    translateY: destPos.top - targetPos.top,
+                    duration: 300,
+                    easing: 'linear',
+                    begin: ()=>{
+                        console.log(' cell ' + this.id,' begin moveTo ', x, y);
+                    },
+                    complete: ()=> {
+                        this.x = x;
+                        this.y = y;
+                        this.id =  x + '_' + y;
+                        this.dom.removeChild(this.span);
+                        dest.appendChild(this.span);
+                        this.span.style.transform = "";
+                        this.dom = dest;
+                        console.log(' cell ' + this.id,' complete moveTo ', x, y);
+                        ok();
+                    }
+                });
+            });
+        }
+        fadeOutTo(dest){
+            const targetPos = util.getPosition(this.span);
+            const destPos = util.getPosition(dest.span);
+            this.span.style.zIndex = '0';
+            return new Promise(ok=>{
+                anime({
+                    targets: this.span,
+                    translateX: destPos.left - targetPos.left,
+                    translateY: destPos.top - targetPos.top,
+                    alpha: 0,
+                    duration: 100,
+                    easing: 'linear',
+                    complete: ()=>{
+                        stage.cells.delete(this.id);
+                        this.dom.removeChild(this.span);
+                        this.span.remove();
+                        this.span = null;
+                        this.dom = null;
+                        ok();
+                    }
+                })
+            });
+        }
+        async merge(cell, direction){
+            this.isMerging = true;
+            cell.isMerging = true;
+            console.log('cell ',this.id, ' begin merge');
+            if(direction.x > 0){
+                if(this.x - cell.x > 0){
+                    await cell.fadeOutTo(this);
+                    this.upgrade();
+                } else {
+                    await this.fadeOutTo(cell);
+                    cell.upgrade();
+                }
+            } else if(direction.x < 0){
+                if(this.x - cell.x > 0){
+                    await this.fadeOutTo(cell);
+                    cell.upgrade();
+                } else {
+                    await cell.fadeOutTo(this);
+                    this.upgrade();
+                }
+            } else if(direction.y > 0){
+                if(this.y - cell.y > 0){
+                    await cell.fadeOutTo(this);
+                    this.upgrade();
+                } else {
+                    await this.fadeOutTo(cell);
+                    cell.upgrade();
+                }
+            } else if(direction.y < 0){
+                if(this.y - cell.y > 0){
+                    await this.fadeOutTo(cell);
+                    cell.upgrade();
+                } else {
+                    await cell.fadeOutTo(this);
+                    this.upgrade();
+                }
+            }
+            this.isMerging = false;
+            cell.isMerging = false;
+            console.log('cell ',this.id, ' complete merge');
+            return 1;
+        }
+    }
+    const util = {
+        getTop(e){
+            let offset=e.offsetTop;
+
+            if(e.offsetParent!=null) offset += this.getTop(e.offsetParent);
+
+            return offset;
+        },
+        getLeft(e){
+            let offset=e.offsetLeft;
+
+            if(e.offsetParent!=null) offset += this.getLeft(e.offsetParent);
+
+            return offset;
+        },
+        getPosition(ele){
+            const left = this.getLeft(ele);
+            const top = this.getTop(ele);
+            return {
+                left,
+                top
+            }
+        }
+    }
+</script>
+</body>
+</html>
